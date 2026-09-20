@@ -6,6 +6,13 @@ namespace VContainerTutorials.Lesson04
 {
     public sealed class Lesson04LifetimeScope : LifetimeScope
     {
+        /// <summary>
+        /// "伪 Prefab"模板。本课不引入真实的 Prefab 资源文件，所以留空时由 Awake() 用代码造一个。
+        /// 真实项目里它就是你在 Inspector 上拖进来的 Prefab 引用。
+        /// </summary>
+        [SerializeField]
+        EnemyPrefabView enemyPrefab;
+
         protected override void Awake()
         {
             // ------------------------------------------------------------------
@@ -20,6 +27,21 @@ namespace VContainerTutorials.Lesson04
             var go = new GameObject("PlayerView (Scene Object)");
             go.transform.SetParent(transform, false);
             go.AddComponent<PlayerView>();
+
+            // ------------------------------------------------------------------
+            // 追加：造一个"伪 Prefab"当作模板（本课不引入真实的 Prefab 资源文件）。
+            //
+            // ⚠️ 模板必须是 active 的：
+            //    容器创建组件时会先 SetActive(false)，让 Instantiate 出来的克隆体也是
+            //    inactive（这样克隆体的 Awake 不会提前跑），注入完成后再 SetActive(true)。
+            //    如果模板本身是 inactive，最后的 SetActive(wasActive) 会让克隆体也保持 inactive。
+            // ------------------------------------------------------------------
+            if (enemyPrefab == null)
+            {
+                var template = new GameObject("EnemyTemplate (伪 Prefab)");
+                template.transform.SetParent(transform, false);
+                enemyPrefab = template.AddComponent<EnemyPrefabView>();
+            }
 
             base.Awake();
         }
@@ -40,6 +62,31 @@ namespace VContainerTutorials.Lesson04
 
             // 入口点：它的构造函数依赖 AutoCreatedView，从而把上面那条"懒创建"拉起来
             builder.RegisterEntryPoint<MbInjectionDemo>();
+
+            // ==================================================================
+            // 追加：动态创建的 Prefab 怎么注入（详见 README 第 9 节）
+            // ==================================================================
+
+            // (1) Prefab 引用是 Unity 资源，不是容器里的服务。
+            //     用 WithParameter 把它作为【构造参数】塞进 EnemySpawner ——
+            //     这样 EnemyPrefabView 这个类型不会被容器占用（Resolve<EnemyPrefabView>() 依然会失败，
+            //     这正是我们想要的：一个"资源模板"不该霸占类型名）。
+            //
+            //     警告：不要写 builder.RegisterInstance(enemyPrefab)。
+            //     它的 TInterface 会被推断成 EnemyPrefabView，于是 Resolve<EnemyPrefabView>()
+            //     返回的是【prefab 资源本身】而不是敌人实例，属于埋雷写法。
+            builder.Register<EnemySpawner>(Lifetime.Scoped)
+                   .WithParameter(enemyPrefab);
+
+            // (2) 工厂：把"怎么造一个敌人"变成一项可注入的能力。
+            //     警告：必须用带 Func<IObjectResolver, Func<T>> 的重载。
+            //     若用 RegisterFactory<T>(Func<T>)，内部只是 RegisterInstance(factory)，
+            //     闭包里拿不到 resolver —— 造出来的对象不会被注入。
+            builder.RegisterFactory<EnemyPrefabView>(
+                resolver => () => resolver.Instantiate(enemyPrefab, transform),
+                Lifetime.Singleton);
+
+            builder.RegisterEntryPoint<PrefabSpawnDemo>();
         }
     }
 }

@@ -139,6 +139,34 @@ Console：
 
 注意 `AutoCreatedView` 的 GameObject 名字正好是我们传给 `RegisterComponentOnNewGameObject` 的名字，而且它被挂在了 `Lesson04LifetimeScope` 的 `transform` 下面（因为用了 `.UnderTransform(transform)`）。
 
+### 5.1 追加内容（动态 Prefab）的运行结果
+
+本课后来又补了"动态创建 Prefab"的例子（详见第 9 节），它多出四个对象：
+
+| 对象 | 触发方式 | 预期输出 |
+| --- | --- | --- |
+| `EnemyPrefabView#2` | `resolver.Instantiate(prefab, parent)` | 注入执行；`Awake 时已注入 = True` |
+| `EnemyPrefabView#3` | `Object.Instantiate` 后补 `resolver.InjectGameObject(raw)` | 补注入后 `Score = 100`，但 `Awake 时已注入 = False` |
+| `EnemyPrefabView#4` | 注入的 `Func<EnemyPrefabView>` 工厂 | 注入执行；`Awake 时已注入 = True` |
+| `EnemyPrefabView#5` | `Object.Instantiate`（**反例**） | `Score = null（没有被注入！）` |
+
+> 编号从 `#2` 开始：作为"伪 Prefab 模板"的那个对象本身也是 `EnemyPrefabView` 的一个实例，它占了 `#1`。
+
+Console（追加部分）：
+
+```
+[Lesson04] EnemyPrefabView#2 的 [Inject] 方法注入被调用，Score = 100
+[Lesson04] EnemyPrefabView#2 [① resolver.Instantiate(prefab, parent)] Score = 100, Awake 时已注入 = True
+[Lesson04] EnemyPrefabView#3 补注入【之前】: Score 是 null ? -> True
+[Lesson04] EnemyPrefabView#3 的 [Inject] 方法注入被调用，Score = 100
+[Lesson04] EnemyPrefabView#3 [② Object.Instantiate + InjectGameObject] Score = 100, Awake 时已注入 = False
+[Lesson04] EnemyPrefabView#4 的 [Inject] 方法注入被调用，Score = 100
+[Lesson04] EnemyPrefabView#4 [③ 注入 Func<EnemyPrefabView> 工厂] Score = 100, Awake 时已注入 = True
+[Lesson04] EnemyPrefabView#5 [④ 反例 Unity 原生 Instantiate（没注入）] Score = null（没有被注入！）, Awake 时已注入 = False
+```
+
+**这两列就是本节的全部看点**：`Score` 说明"有没有被注入"，`Awake 时已注入` 说明"注入发生在 `Awake` 之前还是之后"。
+
 ---
 
 ## 6. 顺手认识两个链式 API
@@ -192,14 +220,200 @@ builder.UseComponents(components =>
 | 只写了 `[Inject]`，没注册也没 InjectGameObject | 字段一直是 `null` | 用上面三种方式之一触发 |
 | `RegisterComponentInHierarchy<T>()` 找不到对象 | 构建时报 `T is not in this scene` | 确认对象在**同一个场景**里，且是从根物体可达的 |
 | `RegisterComponent(instance)` 传了 `null` | 构建时报错 | 检查 `[SerializeField]` 是否拖了引用 |
-| 用 `UnityEngine.Object.Instantiate(prefab)` 而不是 `container.Instantiate(prefab)` | 新对象上的 `[Inject]` 没执行 | 换成 `container.Instantiate(prefab)` |
+| 用 `UnityEngine.Object.Instantiate(prefab)` 而不是 `container.Instantiate(prefab)` | 新对象上的 `[Inject]` 没执行 | 换成 `container.Instantiate(prefab)`（详见第 9 节） |
 | 同一个**具体类型**以 `Lifetime.Singleton` 注册了两次 | 构建时抛 `VContainerException: Conflict implementation type` | 同一个具体类型 + Singleton 在同一作用域只能注册一次（其它生命周期是"后者生效"，详见第 08 课） |
 
 ---
 
-## 9. 练习题
+## 9. 追加：动态创建的 Prefab 怎么注入
+
+> 这一节补上 §4.1(c) 没展开的部分：**运行时**创建 Prefab 实例，怎么让 `[Inject]` 生效。
+>
+> 本课示例里的"伪 Prefab"就是一个普通 `GameObject` + `EnemyPrefabView` 组件 ——
+> 真实项目里它等价于你在 Inspector 上拖的那个 Prefab 资源（`[SerializeField] EnemyPrefabView`）。
+
+### 9.1 前提：MonoBehaviour 的注入点必须显式标 `[Inject]`
+
+因为 Unity 用无参构造函数反序列化组件，构造函数注入对 MonoBehaviour 用不上。
+VContainer 对 MonoBehaviour 只认**显式标记**：
+
+| 位置 | 要求 | 源码 |
+| --- | --- | --- |
+| 字段 | **`[Inject]` only** | `TypeAnalyzer.cs:292-296` |
+| 属性 | **`[Inject]` only** | `TypeAnalyzer.cs:320-324` |
+| 方法 | **`[Inject]` only** | `TypeAnalyzer.cs:267-271` |
+
+而且 —— **这个 MonoBehaviour 自己不需要注册**。`Inject` 只负责把它的依赖填进去，
+被依赖的服务（本课的 `ScoreService`）才需要注册。
+
+### 9.2 四种写法对照
+
+| # | 写法 | 会注入吗 | 适用场景 |
+| --- | --- | --- | --- |
+| ① | `resolver.Instantiate(prefab, parent)` | ✅ | **推荐**：由你负责创建 |
+| ② | `Object.Instantiate(...)` + `resolver.InjectGameObject(go)` | ✅（事后补） | 对象是 Unity / 第三方代码创建的 |
+| ③ | 注入 `Func<EnemyPrefabView>`（由 `RegisterFactory` 提供） | ✅ | 业务类不想碰 `IObjectResolver` |
+| ④ | `Object.Instantiate(...)`（原生） | ❌ | 反例，用来对照 |
+
+①③④ 的差别全在下面这两张表里：
+
+```csharp
+// EnemySpawner.cs（本课新增）
+public EnemyPrefabView Spawn(Transform parent)                       // ①
+    => resolver.Instantiate(prefab, parent);
+
+public EnemyPrefabView CreateRaw(Transform parent)                   // ④ 反例 / ② 的前半段
+{
+    var go = UnityEngine.Object.Instantiate(prefab.gameObject, parent);
+    return go.GetComponent<EnemyPrefabView>();
+}
+
+public EnemyPrefabView Patch(EnemyPrefabView alreadyCreated)         // ② 后半段
+{
+    resolver.InjectGameObject(alreadyCreated.gameObject);
+    return alreadyCreated;
+}
+```
+
+```csharp
+// Lesson04LifetimeScope.cs（本课新增）—— ③ 工厂
+builder.RegisterFactory<EnemyPrefabView>(
+    resolver => () => resolver.Instantiate(enemyPrefab, transform),
+    Lifetime.Singleton);
+```
+
+```csharp
+// PrefabSpawnDemo.cs —— ③ 的消费方式：完全不出现 IObjectResolver
+public PrefabSpawnDemo(EnemySpawner spawner, Func<EnemyPrefabView> createEnemy, LifetimeScope scope)
+...
+createEnemy().Report("③ 注入 Func<EnemyPrefabView> 工厂");
+```
+
+**`resolver.Instantiate` 的重载**（`ObjectResolverUnityExtensions`，`Component` 和 `GameObject` 各有一套）：
+
+| 重载 | 父节点 | 位置 |
+| --- | --- | --- |
+| `Instantiate(prefab)` | 无 | 用 prefab 自身的 transform |
+| `Instantiate(prefab, parent, worldPositionStays = false)` | 指定 | — |
+| `Instantiate(prefab, position, rotation)` | 见 §9.6 的说明 | 指定 |
+| `Instantiate(prefab, position, rotation, parent)` | 指定 | 指定 |
+
+> 这两个扩展方法在 **`VContainer.Unity`** 命名空间，别忘 `using`。
+> 忘了的话 `resolver.Instantiate(...)` 会解析成 Unity 的 `Object.Instantiate`，行为就变成 ④ 了。
+
+### 9.3 ⚠️ 坑 1：工厂要选对重载
+
+同样是"注册工厂"，两个重载的语义完全不同：
+
+```csharp
+// ✅ 正确：能拿到 resolver，造出来的对象会被注入
+builder.RegisterFactory<EnemyPrefabView>(
+    resolver => () => resolver.Instantiate(enemyPrefab, transform),
+    Lifetime.Singleton);
+//   → RegisterFactory<T>(Func<IObjectResolver, Func<T>>, Lifetime)
+
+// ❌ 错误：内部只是 RegisterInstance(factory)，闭包拿不到 resolver → 不会被注入
+builder.RegisterFactory<EnemyPrefabView>(() => UnityEngine.Object.Instantiate(enemyPrefab));
+//   → RegisterFactory<T>(Func<T>)
+```
+
+源码里后者的实现是：
+
+```csharp
+public static RegistrationBuilder RegisterFactory<T>(this IContainerBuilder builder, Func<T> factory)
+    => builder.RegisterInstance(factory);      // ← 只是把一个委托对象注册进去，没有 resolver
+```
+
+**判断口诀：工厂 lambda 的参数里有没有 `IObjectResolver`。** 没有，就一定是注册实例那条路。
+
+### 9.4 ⚠️ 坑 2：Prefab 引用别用 `RegisterInstance` 送进来
+
+Prefab 是 Unity 资源，不是容器里的服务，所以需要想办法把它交给需要它的类。两种常见写法：
+
+```csharp
+// ❌ 埋雷写法
+builder.RegisterInstance(enemyPrefab);
+```
+
+`RegisterInstance<TInterface>(TInterface instance)` 内部是
+`builder.Register(new InstanceRegistrationBuilder(instance)).As(typeof(TInterface))`，
+`TInterface` 会被推断成 **`EnemyPrefabView`**。后果：
+
+- `Resolve<EnemyPrefabView>()` 返回的是 **Prefab 资源本身**，不是敌人实例
+- 任何地方 `[Inject] EnemyPrefabView` 拿到的都是那个模板
+- 它固定是 `Singleton`、**容器永不 Dispose 它**、**也不会对它做注入**
+  （`ExistingInstanceProvider` 被容器的 Dispose 逻辑显式排除）
+
+```csharp
+// ✅ 推荐：作为构造参数注入，不占用任何类型
+builder.Register<EnemySpawner>(Lifetime.Scoped)
+       .WithParameter(enemyPrefab);
+```
+
+```csharp
+public EnemySpawner(IObjectResolver resolver, EnemyPrefabView prefab)   // ← 这个 prefab 由 WithParameter 提供
+```
+
+原理是 `ResolveOrParameter` 会**先查 `Parameters`**，按类型匹配到就直接给值，
+查不到才回落去 `Resolve`（`IObjectResolverExtensions.cs:41-66`）。
+于是容器里**没有** `EnemyPrefabView` 这条注册，类型名干干净净。
+
+另一种同样干净的做法是包一层专用类型再 `RegisterInstance`：
+
+```csharp
+public sealed class EnemyPrefabAsset { public readonly EnemyPrefabView Prefab; /* ... */ }
+builder.RegisterInstance(new EnemyPrefabAsset(enemyPrefab));
+```
+
+### 9.5 ⚠️ 坑 3：`RegisterComponentInNewPrefab` 是懒创建，且只能绑一个
+
+```csharp
+builder.RegisterComponentInNewPrefab<EnemyView>(enemyPrefab, Lifetime.Scoped);
+```
+
+- **懒创建**：没人 `Resolve<EnemyView>()` 就不会建（和 §4.1 的表一致），
+  需要靠别的类的构造函数依赖把它拉起来
+- **一个注册绑一个固定的 Prefab 实例**，不能"每次调用都新建一个"
+- 想要"按需反复创建"，用 §9.3 的工厂或者 ①
+
+### 9.6 注入时机：为什么 `Awake()` 里读 `[Inject]` 字段是安全的
+
+所有 VContainer 的实例化路径都是这个套路（`ObjectResolverUnityExtensions.cs:72-96`、
+`PrefabComponentProvider.cs:31-58`、`NewGameObjectProvider.cs:35-47`）：
+
+```
+① 记住模板的 active 状态，然后 SetActive(false)
+② 实例化  —— 因为模板是 inactive，克隆体也是 inactive → 克隆体的 Awake() 不会跑
+③ 注入（字段 → 属性 → 方法）
+④ finally 里恢复 SetActive(模板原状态) → 克隆体被激活 → 此时 Awake() 才执行
+```
+
+所以：
+
+- **走 ①③ 创建的实例**，`Awake()` 里读 `[Inject]` 字段一定是安全的（本课的 `Awake 时已注入 = True`）
+- **走 ④ 原生 `Object.Instantiate`**，`Awake()` 会在注入之前跑（`= False`）——这就是为什么反例的字段是 `null`
+- **走 ②**，`Awake()` 也是提前跑的（`= False`），只能靠事后 `InjectGameObject` 把值补上
+
+> 这也是"模板必须是 active 的"的原因：如果模板本身是 inactive，
+> 第 ④ 步恢复时克隆体也会被设成 inactive，`Awake()` 永远不跑。
+
+### 9.7 别忘了：动态创建的实例不在容器的生命周期管理内
+
+`resolver.Instantiate(...)` 造出来的对象，容器**没有持有它的引用**，
+所以它不会被 `Dispose`、也不会跟着作用域自动销毁。要自己负责：
+
+- 把实例挂成 `LifetimeScope` 的**子物体**（本课就是这么做的：`parent = scope.transform`），
+  这样 `LifetimeScope` 被销毁时它会跟着一起销毁
+- 或者自己实现 `IDisposable` / 在合适时机 `Destroy`
+
+---
+
+## 10. 练习题
 
 1. 把 `RegisterComponentInHierarchy<PlayerView>()` 换成 `RegisterComponentOnNewGameObject<PlayerView>(Lifetime.Scoped, "PlayerView")`，观察 `Awake` 里手动创建的那个对象还会不会被注入。
 2. 把 `AutoCreatedView` 的 Lifetime 改成 `Singleton`，再跑一次，观察创建时机有没有变化。
 3. 在 `LateInjected` 那个 GameObject 下再挂一个子物体并给它也加上 `[Inject]`，验证 `InjectGameObject` 的递归行为。
 4. 把 `.UnderTransform(transform)` 删掉，观察 `AutoCreatedView` 出现在场景的什么位置，以及销毁 `LifetimeScope` 后它会不会留下。
+5. 把 `EnemySpawner.Spawn()` 里的 `parent` 换成 `null`，再换成 `resolver.Instantiate(prefab, position, rotation)` 这个重载，观察新对象出现在场景的什么位置（提示：这个重载会看 `resolver.ApplicationOrigin`，见 §9.2 的表）。
+6. 把工厂那行改成错误重载 `builder.RegisterFactory<EnemyPrefabView>(() => UnityEngine.Object.Instantiate(enemyPrefab));`，观察 ③ 的输出是不是变成了 `Score = null（没有被注入！）`。
+7. 把 `WithParameter(enemyPrefab)` 删掉，看看构建容器时报什么错（提示：`No such registration of type: VContainerTutorials.Lesson04.EnemyPrefabView`）。想清楚：为什么"用 `WithParameter` 传 Prefab"和"把 Prefab 注册进容器"是两件不同的事？
