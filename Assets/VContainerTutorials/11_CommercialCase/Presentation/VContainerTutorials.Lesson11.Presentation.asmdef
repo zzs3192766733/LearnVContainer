@@ -1,0 +1,18 @@
+{
+    "name": "VContainerTutorials.Lesson11.Presentation",
+    "rootNamespace": "VContainerTutorials.Lesson11.Presentation",
+    "references": [
+        "VContainerTutorials.Lesson11.Domain",
+        "VContainerTutorials.Lesson11.Application",
+        "VContainer"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
