@@ -7,6 +7,7 @@ namespace Tutorial_01
     {
         protected override void Configure(IContainerBuilder builder)
         {
+            builder.Register<DebugLogger>(Lifetime.Singleton).As<ILogger>();
             builder.Register<SayHelloService>(Lifetime.Singleton);
 
             builder.RegisterEntryPoint<SayHelloApp>();

@@ -1,4 +1,5 @@
 ﻿using VContainer;
+using VContainer.Diagnostics;
 using VContainer.Unity;
 
 namespace Tutorial_01
@@ -10,23 +11,18 @@ namespace Tutorial_01
     
     public class SayHelloApp : IStartable
     {
-        //readonly SayHelloService m_SayHelloService;
-        readonly IObjectResolver m_Container;
+        readonly SayHelloService m_SayHelloService;
+        readonly SayHelloLifetimeScope m_SayHelloLifetimeScope;
         
-        public SayHelloApp(/*SayHelloService sayHelloService, */IObjectResolver resolver)
+        public SayHelloApp(SayHelloService sayHelloService, SayHelloLifetimeScope sayHelloLifetimeScope)
         {
-            //this.m_SayHelloService = sayHelloService;
-            this.m_Container = resolver;
+            this.m_SayHelloLifetimeScope = sayHelloLifetimeScope;
+            this.m_SayHelloService = sayHelloService;
         }
         
         public void Start()
         {
-            //m_SayHelloService.SayHello();
-
-            this.m_Container.CreateScope(containerBuilder =>
-            {
-                containerBuilder.Register<TestService>(Lifetime.Scoped);
-            });
+            m_SayHelloService.SayHello();
         }
     }
 }
